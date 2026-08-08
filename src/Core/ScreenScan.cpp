@@ -7,11 +7,20 @@ ScreenScan::ScreenScan()
 	double zoom = getZoom();
 	m_width = GetSystemMetrics(SM_CXSCREEN) * (int)zoom;
 	m_height = GetSystemMetrics(SM_CYSCREEN) * (int)zoom;
+	if (m_width <= 0 || m_height <= 0)
+	{
+		m_width = 1920;
+		m_height = 1080;
+	}
 	m_screenshotData = new char[m_width * m_height * 4];
 	memset(m_screenshotData, 0, m_width);
 
 	// 获取屏幕 DC
 	m_screenDC = GetDC(NULL);
+	if (!m_screenDC)
+	{
+		m_screenDC = GetDC(GetDesktopWindow());
+	}
 	m_compatibleDC = CreateCompatibleDC(m_screenDC);
 
 	// 创建位图
@@ -22,6 +31,10 @@ ScreenScan::ScreenScan()
 /* 获取整个屏幕的截图 */
 Mat ScreenScan::getScreenshot()
 {
+	if (!m_compatibleDC || !m_screenDC || !m_hBitmap)
+	{
+		return Mat{};
+	}
 	// 得到位图的数据
 	BitBlt(m_compatibleDC, 0, 0, m_width, m_height, m_screenDC, 0, 0, SRCCOPY);
 	GetBitmapBits(m_hBitmap, m_width * m_height * 4, m_screenshotData);
@@ -50,11 +63,18 @@ double ScreenScan::getZoom()
 	// 获取窗口当前显示的监视器
 	HWND hWnd = GetDesktopWindow();
 	HMONITOR hMonitor = MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST);
+	if (!hMonitor)
+	{
+		return 1.0;
+	}
 
 	// 获取监视器逻辑宽度
 	MONITORINFOEX monitorInfo;
 	monitorInfo.cbSize = sizeof(monitorInfo);
-	GetMonitorInfo(hMonitor, &monitorInfo);
+	if (!GetMonitorInfo(hMonitor, &monitorInfo))
+	{
+		return 1.0;
+	}
 	int cxLogical = (monitorInfo.rcMonitor.right - monitorInfo.rcMonitor.left);
 
 	// 获取监视器物理宽度

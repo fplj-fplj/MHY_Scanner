@@ -212,7 +212,7 @@ void WindowMain::pBtstartScreen(bool clicked)
             std::string stoken = userinfo["account"][countA]["access_key"];
             std::string uid = userinfo["account"][countA]["uid"];
             std::string mid = userinfo["account"][countA]["mid"];
-            auto [code, game_token] = GetGameTokenByStoken(stoken, mid);
+            auto [code, game_token] = GetGameTokenByStoken(stoken, mid, uid);
             if (code != 0)
             {
                 emit AccountError();
@@ -275,7 +275,7 @@ void WindowMain::pBtStream(bool clicked)
             std::string stoken = userinfo["account"][countA]["access_key"];
             std::string uid = userinfo["account"][countA]["uid"];
             std::string mid = userinfo["account"][countA]["mid"];
-            auto [code, game_token] = GetGameTokenByStoken(stoken, mid);
+            auto [code, game_token] = GetGameTokenByStoken(stoken, mid, uid);
             if (code != 0)
             {
                 emit AccountError();
@@ -695,7 +695,13 @@ void WindowMain::copyEntireRow(int row)
 
 void OnlineUpdate::run()
 {
-    auto str = getOAString();
+    try
+    {
+        getOAString();
+    }
+    catch (...)
+    {
+    }
 }
 
 OnlineUpdate::~OnlineUpdate()

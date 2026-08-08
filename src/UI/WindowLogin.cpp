@@ -324,16 +324,23 @@ void WindowLogin::Initconnect()
         else if (GeeTestInfo.GeeTestType == ServerType::Official)
         {
             QThreadPool::globalInstance()->start([this, Message]() {
-                auto [code, data] = CreateLoginCaptcha(phoneNumberLineEdit->text().toStdString(),
-                                                       GeeTestInfo.session_id + ";" + Message.toUtf8().toBase64().toStdString());
-                if (code == 0)
+                try
                 {
-                    GeeTestInfo.action_type = data.action_type;
-                    emit ButtonEnabled(true);
+                    auto [code, data] = CreateLoginCaptcha(phoneNumberLineEdit->text().toStdString(),
+                                                           GeeTestInfo.session_id + ";" + Message.toUtf8().toBase64().toStdString());
+                    if (code == 0)
+                    {
+                        GeeTestInfo.action_type = data.action_type;
+                        emit ButtonEnabled(true);
+                    }
+                    else if (code == -3006)
+                    {
+                        emit showMessagebox("请求过于频繁，请稍后再试");
+                    }
                 }
-                else if (code == -3006)
+                catch (...)
                 {
-                    emit showMessagebox("请求过于频繁，请稍后再试");
+                    emit showMessagebox("网络异常，请稍后再试");
                 }
             });
         }
@@ -362,35 +369,57 @@ void WindowLogin::Initconnect()
 
     connect(pbtSend, &QPushButton::clicked, this, [this] {
         QThreadPool::globalInstance()->start([this] {
-            auto [code, data] = CreateLoginCaptcha(phoneNumberLineEdit->text().toStdString());
-            if (data.mmt_type)
+            try
             {
-                GeeTestInfo = data;
-                m_WindowGeeTest.Init(stringTowstring(GeeTestInfo.gt), stringTowstring(GeeTestInfo.challenge));
-                emit showWindowGeeTest(true);
+                auto [code, data] = CreateLoginCaptcha(phoneNumberLineEdit->text().toStdString());
+                if (data.mmt_type)
+                {
+                    GeeTestInfo = data;
+                    m_WindowGeeTest.Init(stringTowstring(GeeTestInfo.gt), stringTowstring(GeeTestInfo.challenge));
+                    emit showWindowGeeTest(true);
+                }
+                else if (!GeeTestInfo.mmt_type)
+                {
+                    emit ButtonEnabled(true);
+                }
+                else if (code == -3008)
+                {
+                    emit showMessagebox("手机号错误");
+                }
             }
-            else if (!GeeTestInfo.mmt_type)
+            catch (...)
             {
-                emit ButtonEnabled(true);
-            }
-            else if (code == -3008)
-            {
-                emit showMessagebox("手机号错误");
+                emit showMessagebox("网络异常，请稍后再试");
             }
         });
     });
 
     connect(Tab0pbtConfirm, &QPushButton::clicked, this, [this] {
         QThreadPool::globalInstance()->start([this] {
-            auto result = LoginByMobileCaptcha(GeeTestInfo.action_type, phoneNumberLineEdit->text().toStdString(), verifyCodeLineEdit->text().toStdString());
-            if (result.retcode == -3205)
+            try
             {
-                emit showMessagebox("短信验证码错误");
+                auto result = LoginByMobileCaptcha(GeeTestInfo.action_type, phoneNumberLineEdit->text().toStdString(), verifyCodeLineEdit->text().toStdString());
+                if (result.retcode == -3205)
+                {
+                    emit showMessagebox("短信验证码错误");
+                }
+                else if (result.retcode == 0)
+                {
+                    std::string name{ result.data.name };
+                    if (name.empty())
+                    {
+                        name = getMysUserName(result.data.aid);
+                    }
+                    emit AddUserInfo(name, result.data.V2Token, result.data.aid, result.data.mid, "官服");
+                }
+                else
+                {
+                    emit showMessagebox("登录失败，请稍后再试");
+                }
             }
-            else if (result.retcode == 0)
+            catch (...)
             {
-                const std::string name{ getMysUserName(result.data.aid) };
-                emit AddUserInfo(name, result.data.V2Token, result.data.aid, result.data.mid, "官服");
+                emit showMessagebox("网络异常，请稍后再试");
             }
         });
     });
@@ -404,43 +433,64 @@ void WindowLogin::Initconnect()
 
     connect(pBtofficialLogin, &QPushButton::clicked, this, [this] {
         QThreadPool::globalInstance()->start([this] {
-            std::string CookieString{ lineEditCookie->text().toStdString() };
-            CookieParser cp(CookieString);
-            std::string uid{}, stoken{}, mid{};
-            static constinit const std::array<std::string_view, 3> keys{ "stuid", "ltuid", "account_id" };
-            auto result = std::ranges::find_if(keys, [&cp, &uid](const std::string_view key) {
-                if (auto value = cp[key]; value.has_value())
+            try
+            {
+                std::string CookieString{ lineEditCookie->text().toStdString() };
+                CookieParser cp(CookieString);
+                std::string uid{}, stoken{}, mid{};
+                static constinit const std::array<std::string_view, 3> keys{ "stuid", "ltuid", "account_id" };
+                auto result = std::ranges::find_if(keys, [&cp, &uid](const std::string_view key) {
+                    if (auto value = cp[key]; value.has_value())
+                    {
+                        uid = *value;
+                        return true;
+                    }
+                    return false;
+                });
+                if (result == keys.end())
                 {
-                    uid = *value;
-                    return true;
+                    Q_EMIT showMessagebox("Cookie格式错误!");
+                    return;
                 }
-                return false;
-            });
-            if (result == keys.end())
-            {
-                Q_EMIT showMessagebox("Cookie格式错误!");
-                return;
+                if (auto value = cp["stoken"]; value.has_value())
+                {
+                    stoken = *value;
+                }
+                else if (auto loginTicket = cp["login_ticket"]; loginTicket.has_value())
+                {
+                    auto [code, token, tokenMid] = GetStokenByLoginTicket(*loginTicket, uid);
+                    if (code != 0 || token.empty())
+                    {
+                        Q_EMIT showMessagebox("Cookie中没有有效的SToken!");
+                        return;
+                    }
+                    stoken = token;
+                    mid = tokenMid;
+                }
+                else
+                {
+                    Q_EMIT showMessagebox("Cookie格式错误!");
+                    return;
+                }
+                if (mid.empty())
+                {
+                    if (auto value = cp["mid"]; value.has_value())
+                    {
+                        mid = *value;
+                    }
+                }
+                if (mid.empty())
+                {
+                    Q_EMIT showMessagebox("Cookie格式错误!");
+                    return;
+                }
+                const std::string name{ getMysUserName(uid) };
+                Q_EMIT AddUserInfo(name, stoken, uid, mid, "官服");
             }
-            if (auto value = cp["stoken"]; value.has_value())
+            catch (...)
             {
-                stoken = *value;
+                Q_EMIT showMessagebox("网络异常，请稍后再试");
             }
-            else
-            {
-                Q_EMIT showMessagebox("Cookie格式错误!");
-                return;
-            }
-            if (auto value = cp["mid"]; value.has_value())
-            {
-                mid = *value;
-            }
-            else
-            {
-                Q_EMIT showMessagebox("Cookie格式错误!");
-                return;
-            }
-            const std::string name{ getMysUserName(uid) };
-            Q_EMIT AddUserInfo(name, stoken, uid, mid, "官服");
         });
     });
 
@@ -519,12 +569,24 @@ void WindowLogin::StartQRCodeLogin()
     UpdateQrcodeButton->move(QRCodelabel->x() + (QRCodelabel->width() - 170) / 2, QRCodelabel->y() + (QRCodelabel->height() - 170) / 2);
     AllowDrawQRCode.store(true);
     QrcodePool.start([this]() {
-        QrcodePool.clear();
         QRCodeQImage.fill(255);
         QRCodelabel->setText("二维码加载中");
         AllowDrawQRCode.store(false);
-        const std::string qrcodeString{ GetLoginQrcodeUrl() };
-        ticket = std::string{ qrcodeString.data() + qrcodeString.size() - 24, 24 };
+        std::string qrcodeString{};
+        try
+        {
+            auto [url, ticketFromServer] = CreateQRLogin();
+            qrcodeString = url;
+            ticket = ticketFromServer;
+        }
+        catch (...)
+        {
+        }
+        if (qrcodeString.empty())
+        {
+            emit QrcodeLoginResult(false);
+            return;
+        }
         QrcodeMat = createQrCodeToCvMat(qrcodeString);
         QRCodeQImage = CV_8UC1_MatToQImage(QrcodeMat);
         if (AllowDrawQRCode.load())
@@ -538,42 +600,43 @@ void WindowLogin::StartQRCodeLogin()
 
 void WindowLogin::CheckQRCodeLoginState()
 {
-    auto [state, uid, game_token] = GetQRCodeState(ticket);
-    switch (state)
+    try
     {
-    case LoginQRCodeState::Init:
-    {
-    }
-    break;
-    case LoginQRCodeState::Scanned:
-    {
-        QRCodelabel->setText("正在登录\n\n请在手机上点击「确认登录」");
-    }
-    break;
-    case LoginQRCodeState::Confirmed:
-    {
-        auto [code, mid, stoken] = GetStokenByGameToken(uid, game_token);
-        if (code == 0)
+        auto [code, status, stoken, aid, mid, accountName] = QueryQRLoginStatus(ticket);
+        if (code != 0 || status == "Expired")
         {
-            std::string name{ getMysUserName(uid) };
-            emit AddUserInfo(name, stoken, uid, mid, "官服");
+            emit QrcodeLoginResult(false);
+            return;
+        }
+        if (status == "Init")
+        {
+            return;
+        }
+        if (status == "Scanned")
+        {
+            QRCodelabel->setText("正在登录\n\n请在手机上点击「确认登录」");
+            return;
+        }
+        if (status == "Confirmed")
+        {
+            if (stoken.empty() || aid.empty())
+            {
+                emit showMessagebox("获取STOKEN失败！");
+                emit QrcodeLoginResult(false);
+                return;
+            }
+            std::string name{ accountName };
+            if (name.empty())
+            {
+                name = getMysUserName(aid);
+            }
+            emit AddUserInfo(name, stoken, aid, mid, "官服");
             QRCodelabel->setText("登录成功！");
             emit QrcodeLoginResult(true);
         }
-        else
-        {
-            emit showMessagebox("获取STOKEN失败！");
-        }
-        return;
     }
-    break;
-    case LoginQRCodeState::Expired:
+    catch (...)
     {
         emit QrcodeLoginResult(false);
-        return;
-    }
-    break;
-    default:
-        __assume(0);
     }
 }

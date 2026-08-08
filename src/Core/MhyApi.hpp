@@ -7,6 +7,7 @@
 #include <sstream>
 #include <optional>
 #include <iostream>
+#include <unordered_map>
 
 #include <nlohmann/json.hpp>
 #include <cpr/cpr.h>
@@ -18,14 +19,8 @@
 #include "TimeStamp.hpp"
 
 static const std::string device_id{ CreateUUID::CreateUUID4() };
-static GameType loginType{ GameType::TearsOfThemis };
 
-[[nodiscard]] inline std::string DataSignAlgorithmVersionGen1()
-{
-    return "";
-}
-
-[[nodiscard]] inline std::string DataSignAlgorithmVersionGen2(const std::string_view body, const std::string_view query)
+[[nodiscard]] inline std::string DataSignAlgorithmVersionGen1(const std::string_view salt = mihoyobbs_salt_x6)
 {
     const std::string time_now{ std::to_string(GetUnixTimeStampSeconds()) };
     std::random_device rd{};
@@ -34,7 +29,20 @@ static GameType loginType{ GameType::TearsOfThemis };
     int upper_bound{ 200000 };
     std::uniform_int_distribution<int> dist(lower_bound, upper_bound);
     const std::string rand{ std::to_string(dist(gen)) };
-    std::string m{ "salt=" + std::string(mihoyobbs_salt_x6) + "&t=" + time_now + "&r=" + rand + "&b=" + std::string(body) + "&q=" + std::string(query) };
+    std::string m{ "salt=" + std::string(salt) + "&t=" + time_now + "&r=" + rand };
+    return time_now + "," + rand + "," + Md5(m);
+}
+
+[[nodiscard]] inline std::string DataSignAlgorithmVersionGen2(const std::string_view body, const std::string_view query, const std::string_view salt = mihoyobbs_salt_x6)
+{
+    const std::string time_now{ std::to_string(GetUnixTimeStampSeconds()) };
+    std::random_device rd{};
+    std::mt19937 gen{ rd() };
+    int lower_bound{ 100001 };
+    int upper_bound{ 200000 };
+    std::uniform_int_distribution<int> dist(lower_bound, upper_bound);
+    const std::string rand{ std::to_string(dist(gen)) };
+    std::string m{ "salt=" + std::string(salt) + "&t=" + time_now + "&r=" + rand + "&b=" + std::string(body) + "&q=" + std::string(query) };
     return time_now + "," + rand + "," + Md5(m);
 }
 
@@ -54,10 +62,12 @@ inline std::string Encrypt(const std::string_view source)
 inline cpr::Header GetRequestHeader()
 {
     static cpr::Header headers{
-        { "User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) miHoYoBBS/2.76.1" },
+        { "Content-Type", "application/json" },
+        { "User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) miHoYoBBS/2.95.1" },
         { "Accept", "application/json" },
+        { "x-rpc-aigis", "" },
         { "x-rpc-app_id", "bll8iq97cem8" },
-        { "x-rpc-app_version", "2.76.1" },
+        { "x-rpc-app_version", "2.95.1" },
         { "x-rpc-client_type", "2" },
         { "x-rpc-device_id", device_id },
         { "x-rpc-device_name", "" },
@@ -67,102 +77,125 @@ inline cpr::Header GetRequestHeader()
     return headers;
 }
 
-inline std::string GetLoginQrcodeUrl(const GameType type = loginType)
+inline std::string randomLowerAndNumberString(const size_t length)
 {
-    auto res = cpr::Post(
-        cpr::Url{ api::mhy::hk4e::qrcode_fetch },
-        cpr::Body{ nlohmann::json{
-            { "app_id", static_cast<int>(type) },
-            { "device", device_id } }
-                       .dump() },
-        cpr::Header{ { "Content-Type", "application/json" } });
-
-    auto data = nlohmann::json::parse(res.text);
-    std::string qrcodeUrl = data["data"]["url"].get<std::string>();
-    return qrcodeUrl;
+    static constexpr std::string_view chars{ "abcdefghijklmnopqrstuvwxyz0123456789" };
+    std::random_device rd{};
+    std::mt19937 gen{ rd() };
+    std::uniform_int_distribution<size_t> dist(0, chars.size() - 1);
+    std::string result;
+    result.reserve(length);
+    for (size_t i{}; i < length; i++)
+        result += chars[dist(gen)];
+    return result;
 }
 
-inline std::tuple<LoginQRCodeState, std::string, std::string> GetQRCodeState(
-    const std::string_view ticket,
-    const GameType type = loginType)
+static const std::string qr_login_device_id{ randomLowerAndNumberString(53) };
+
+inline cpr::Header GetQRLoginHeader()
 {
-    const auto response = cpr::Post(
-        cpr::Url{ api::mhy::hk4e::qrcode_query },
-        cpr::Body{ nlohmann::json{
-            { "app_id", static_cast<int>(type) },
-            { "device", device_id },
-            { "ticket", ticket } }
-                       .dump() },
-        cpr::Header{ { "Content-Type", "application/json" } });
-
-    const auto data = nlohmann::json::parse(response.text);
-
-    if (data.value("retcode", -1) != 0)
-        return { LoginQRCodeState::Expired, {}, {} };
-
-    static const std::unordered_map<std::string, LoginQRCodeState> stateMap{
-        { "Init", LoginQRCodeState::Init },
-        { "Scanned", LoginQRCodeState::Scanned },
-        { "Confirmed", LoginQRCodeState::Confirmed },
+    return cpr::Header{
+        { "Content-Type", "application/json" },
+        { "User-Agent", "HYPContainer/1.1.4.133" },
+        { "Accept", "application/json" },
+        { "x-rpc-app_id", "ddxf5dufpuyo" },
+        { "x-rpc-client_type", "3" },
+        { "x-rpc-device_id", qr_login_device_id }
     };
-
-    const auto stat = data["data"]["stat"].get<std::string>();
-    const auto it = stateMap.find(stat);
-
-    if (it == stateMap.end())
-        return { LoginQRCodeState::Expired, {}, {} };
-
-    if (it->second == LoginQRCodeState::Confirmed)
-    {
-        const auto payload = nlohmann::json::parse(
-            data["data"]["payload"]["raw"].get<std::string>());
-        return { LoginQRCodeState::Confirmed,
-                 payload["uid"].get<std::string>(),
-                 payload["token"].get<std::string>() };
-    }
-
-    return { it->second, {}, {} };
 }
 
 inline std::string getMysUserName(const std::string_view uid)
 {
     static constexpr std::string_view url = api::mhy::mys::userinfo;
+    cpr::Header headers{ GetRequestHeader() };
+    headers["DS"] = DataSignAlgorithmVersionGen2("", std::format("uid={}", uid), mihoyobbs_salt_x4);
     const auto response = cpr::Get(
-        cpr::Url{ std::format("{}?uid={}", url, uid) });
+        cpr::Url{ std::format("{}?uid={}", url, uid) },
+        cpr::Header{ headers });
 
-    const auto data = nlohmann::json::parse(response.text);
-    return data["data"]["user_info"]["nickname"].get<std::string>();
+    try
+    {
+        const auto data = nlohmann::json::parse(response.text);
+        if (data.value("retcode", -1) != 0)
+            return {};
+        if (!data["data"].contains("user_info"))
+            return {};
+        return data["data"]["user_info"].value("nickname", std::string{});
+    }
+    catch (...)
+    {
+        return {};
+    }
 }
 
-inline std::tuple<int, std::string, std::string> GetStokenByGameToken(
-    const std::string_view uid,
-    const std::string_view game_token)
+inline std::tuple<std::string, std::string> CreateQRLogin()
 {
     const auto response = cpr::Post(
-        cpr::Url{ api::mhy::takumi::game_token_stoken },
-        cpr::Body{ nlohmann::json{ { "account_id", std::stoi(uid.data()) }, { "game_token", game_token } }.dump() },
-        GetRequestHeader());
+        cpr::Url{ api::mhy::passport::create_qr_login },
+        cpr::Body{ "{}" },
+        GetQRLoginHeader());
+
+    const auto j = nlohmann::json::parse(response.text);
+    if (j.value("retcode", -1) != 0)
+        return { {}, {} };
+    return { j["data"]["url"].get<std::string>(),
+             j["data"]["ticket"].get<std::string>() };
+}
+
+inline std::tuple<int, std::string, std::string, std::string, std::string, std::string> QueryQRLoginStatus(const std::string_view ticket)
+{
+    const auto response = cpr::Post(
+        cpr::Url{ api::mhy::passport::query_qr_login_status },
+        cpr::Body{ nlohmann::json{ { "ticket", ticket } }.dump() },
+        GetQRLoginHeader());
 
     const auto j = nlohmann::json::parse(response.text);
     const int retcode = j.value("retcode", -1);
-
     if (retcode != 0)
-        return { retcode, {}, {} };
+        return { retcode, {}, {}, {}, {}, {} };
 
-    return { 0,
-             j["data"]["user_info"]["mid"].get<std::string>(),
-             j["data"]["token"]["token"].get<std::string>() };
+    const std::string status = j["data"].value("status", std::string{});
+    std::string stoken{};
+    if (j["data"].contains("tokens"))
+    {
+        for (const auto& token : j["data"]["tokens"])
+        {
+            if (token.value("token_type", 0) == 1)
+            {
+                stoken = token.value("token", std::string{});
+                break;
+            }
+        }
+    }
+    std::string aid{};
+    std::string mid{};
+    std::string accountName{};
+    if (j["data"].contains("user_info"))
+    {
+        aid = j["data"]["user_info"].value("aid", std::string{});
+        mid = j["data"]["user_info"].value("mid", std::string{});
+        accountName = j["data"]["user_info"].value("account_name", std::string{});
+    }
+    return { 0, status, stoken, aid, mid, accountName };
 }
 
 inline std::tuple<int, std::string> GetGameTokenByStoken(
     const std::string_view stoken,
-    const std::string_view mid)
+    const std::string_view mid,
+    const std::string_view stuid = "")
 {
+    cpr::Header headers{ GetRequestHeader() };
+    std::string cookie{ "stoken=" + std::string(stoken) };
+    if (!mid.empty())
+        cookie += "; mid=" + std::string(mid);
+    if (!stuid.empty())
+        cookie += "; stuid=" + std::string(stuid);
+    headers["Cookie"] = cookie;
+    headers["DS"] = DataSignAlgorithmVersionGen1(mihoyobbs_salt_k2);
+
     const auto response = cpr::Get(
         cpr::Url{ api::mhy::takumi::game_token },
-        cpr::Parameters{
-            { "stoken", stoken.data() },
-            { "mid", mid.data() } });
+        cpr::Header{ headers });
 
     const auto j = nlohmann::json::parse(response.text);
     const int retcode = j.value("retcode", -1);
@@ -171,6 +204,35 @@ inline std::tuple<int, std::string> GetGameTokenByStoken(
         return { retcode, {} };
 
     return { 0, j["data"]["game_token"].get<std::string>() };
+}
+
+inline std::tuple<int, std::string, std::string> GetStokenByLoginTicket(
+    const std::string_view login_ticket,
+    const std::string_view login_uid)
+{
+    const std::string url{ std::string(api::mhy::takumi::multi_token) +
+                           "?login_ticket=" + std::string(login_ticket) +
+                           "&uid=" + std::string(login_uid) +
+                           "&token_types=3" };
+    const auto response = cpr::Get(cpr::Url{ url });
+
+    const auto j = nlohmann::json::parse(response.text);
+    const int retcode = j.value("retcode", -1);
+
+    if (retcode != 0)
+        return { retcode, {}, {} };
+
+    std::string stoken{};
+    std::string mid{};
+    for (const auto& token : j["data"].at("list"))
+    {
+        const std::string name = token.value("name", std::string{});
+        if (name == "stoken")
+            stoken = token.value("token", std::string{});
+        else if (name == "mid")
+            mid = token.value("token", std::string{});
+    }
+    return { 0, stoken, mid };
 }
 
 inline std::tuple<int, GeetestData> CreateLoginCaptcha(
@@ -182,11 +244,11 @@ inline std::tuple<int, GeetestData> CreateLoginCaptcha(
         { "mobile", Encrypt(mobile) } }
                                 .dump() };
     cpr::Header reqHeaders{ GetRequestHeader() };
-    reqHeaders["DS"] = DataSignAlgorithmVersionGen2(body, "");
+    reqHeaders["DS"] = DataSignAlgorithmVersionGen2(body, "", mihoyobbs_salt_prod);
     if (!aigis.empty())
         reqHeaders["X-Rpc-Aigis"] = aigis;
     const auto response = cpr::Post(
-        cpr::Url{ api::mhy::passport::login_by_mobile_captcha },
+        cpr::Url{ api::mhy::passport::create_captcha },
         cpr::Body{ body },
         cpr::Header{ reqHeaders });
 
@@ -195,7 +257,7 @@ inline std::tuple<int, GeetestData> CreateLoginCaptcha(
     GeetestData result{};
     if (retcode == 0)
     {
-        result.action_type = j["data"]["action_type"].get<std::string>();
+        result.action_type = j["data"].value("action_type", std::string{});
         return { retcode, result };
     }
     if (retcode == -3101)
@@ -226,39 +288,44 @@ inline auto LoginByMobileCaptcha(const std::string_view actionType, const std::s
             std::string V2Token{};
             std::string aid{};
             std::string mid{};
+            std::string name{};
         } data;
     } result;
-#if 0
-	const std::string RequestBody{ std::format(R"({{"area_code":"{}","action_type":"{}","captcha":"{}","mobile":"{}"}})", Encrypt("+86"), actionType, captcha, Encrypt(mobile)) };
-    std::map<std::string, std::string> headers{ GetRequestHeader() };
-    headers["DS"] = DataSignAlgorithmVersionGen2(RequestBody, "");
+
+    const std::string body{ nlohmann::json{
+        { "area_code", Encrypt("+86") },
+        { "action_type", actionType },
+        { "captcha", captcha },
+        { "mobile", Encrypt(mobile) } }
+                                .dump() };
+    cpr::Header reqHeaders{ GetRequestHeader() };
+    reqHeaders["DS"] = DataSignAlgorithmVersionGen2(body, "", mihoyobbs_salt_prod);
     if (!aigis.empty())
+        reqHeaders["X-Rpc-Aigis"] = aigis;
+
+    const auto response = cpr::Post(
+        cpr::Url{ api::mhy::passport::login_by_mobile_captcha },
+        cpr::Body{ body },
+        cpr::Header{ reqHeaders });
+
+    const auto j = nlohmann::json::parse(response.text);
+    result.retcode = j.value("retcode", -1);
+    if (result.retcode == 0)
     {
-        headers["X-Rpc-Aigis"] = aigis;
+        result.data.V2Token = j["data"]["token"].value("token", std::string{});
+        result.data.aid = j["data"]["user_info"].value("aid", std::string{});
+        result.data.mid = j["data"]["user_info"].value("mid", std::string{});
+        result.data.name = j["data"]["user_info"].value("account_name", std::string{});
     }
-    HttpClient h;
-    std::string s;
-    h.PostRequest(s, URL_LoginByMobileCaptcha, RequestBody, headers);
-    //std::cout << s << std::endl;
-    json::Json j{};
-    j.parse(s);
-    result.retcode = j["retcode"];
-    if (result.retcode == -3205)
-    {
-        return result;
-    }
-    else if (result.retcode == 0)
-    {
-        result.data.V2Token = j["data"]["token"]["token"];
-        result.data.aid = j["data"]["user_info"]["aid"];
-        result.data.mid = j["data"]["user_info"]["mid"];
-    }
-#endif
     return result;
 }
 
 inline bool ScanQRLogin(const std::string_view url, const std::string_view ticket, GameType gameType)
 {
+    cpr::Header headers{ GetRequestHeader() };
+    headers["Content-Type"] = "application/json";
+    headers["x-rpc-app_id"] = "bll8iq97cem8";
+    headers["x-rpc-game_biz"] = "bbs_cn";
     const auto response = cpr::Post(
         cpr::Url{ url },
         cpr::Body{ nlohmann::json{
@@ -266,7 +333,7 @@ inline bool ScanQRLogin(const std::string_view url, const std::string_view ticke
             { "device", device_id },
             { "ticket", ticket } }
                        .dump() },
-        cpr::Header{ { "Content-Type", "application/json" } });
+        cpr::Header{ headers });
 
     const auto j = nlohmann::json::parse(response.text);
     return j.value("retcode", -1) == 0;
@@ -274,6 +341,10 @@ inline bool ScanQRLogin(const std::string_view url, const std::string_view ticke
 
 inline bool ConfirmQRLogin(const std::string_view url, const std::string_view uid, const std::string_view gameToken, const std::string_view ticket, GameType gameType)
 {
+    cpr::Header headers{ GetRequestHeader() };
+    headers["Content-Type"] = "application/json";
+    headers["x-rpc-app_id"] = "bll8iq97cem8";
+    headers["x-rpc-game_biz"] = "bbs_cn";
     const auto response = cpr::Post(
         cpr::Url{ url },
         cpr::Body{ nlohmann::json{
@@ -282,7 +353,7 @@ inline bool ConfirmQRLogin(const std::string_view url, const std::string_view ui
             { "ticket", ticket },
             { "payload", { { "proto", "Account" }, { "raw", nlohmann::json{ { "uid", uid }, { "token", gameToken } }.dump() } } } }
                        .dump() },
-        cpr::Header{ { "Content-Type", "application/json" } });
+        cpr::Header{ headers });
 
     const auto j = nlohmann::json::parse(response.text);
     return j.value("retcode", -1) == 0;
@@ -311,10 +382,19 @@ inline std::string makeSign(const nlohmann::json& data)
 inline std::string& getOAString()
 {
     static std::string value = []() {
-        const auto response = cpr::Get(cpr::Url{ "https://api.v6qbb.cloud/get_bh3_bilibili_oa" });
-        if (response.text.empty())
-            throw std::runtime_error("");
-        return response.text;
+        try
+        {
+            const auto response = cpr::Get(
+                cpr::Url{ "https://api.v6qbb.cloud/get_bh3_bilibili_oa" },
+                cpr::Timeout{ std::chrono::seconds{ 10 } });
+            if (response.text.empty())
+                return std::string{};
+            return response.text;
+        }
+        catch (...)
+        {
+            return std::string{};
+        }
     }();
     return value;
 }
@@ -330,9 +410,13 @@ inline std::tuple<int, std::string, std::string, std::string> GetBH3ExternalLogi
         { "data", bodyData }
     };
     body["sign"] = makeSign(body);
+    cpr::Header headers{ GetRequestHeader() };
+    headers["Content-Type"] = "application/json";
+    headers["x-rpc-app_id"] = "bll8iq97cem8";
+    headers["x-rpc-game_biz"] = "bbs_cn";
     const auto response = cpr::Post(
         cpr::Url{ api::mhy::bh3::v2_login },
-        cpr::Header{ { "Content-Type", "application/json" } },
+        cpr::Header{ headers },
         cpr::Body{ body.dump() });
 
     const auto j = nlohmann::json::parse(response.text);
@@ -362,10 +446,14 @@ inline ScanRet scanCheck(const std::string& ticket)
         { "ts", GetUnixTimeStampSeconds() }
     }.dump();
 
+    cpr::Header headers{ GetRequestHeader() };
+    headers["Content-Type"] = "application/json";
+    headers["x-rpc-app_id"] = "bll8iq97cem8";
+    headers["x-rpc-game_biz"] = "bbs_cn";
     const auto response = cpr::Post(
         cpr::Url{ api::mhy::bh3::qrcode_scan },
         cpr::Body{ body },
-        cpr::Header{ { "Content-Type", "application/json" } });
+        cpr::Header{ headers });
 
     const auto j = nlohmann::json::parse(response.text);
     return j.value("retcode", -1) == 0 ? ScanRet::SUCCESS : ScanRet::FAILURE_1;
@@ -415,9 +503,13 @@ inline ScanRet scanConfirm(const std::string& ticket, const std::string& uid, co
     std::cout << postBody.dump() << std::endl;
 #endif
 
+    cpr::Header headers{ GetRequestHeader() };
+    headers["Content-Type"] = "application/json";
+    headers["x-rpc-app_id"] = "bll8iq97cem8";
+    headers["x-rpc-game_biz"] = "bbs_cn";
     const auto response = cpr::Post(
         cpr::Url{ api::mhy::bh3::qrcode_confirm },
-        cpr::Header{ { "Content-Type", "application/json" } },
+        cpr::Header{ headers },
         cpr::Body{ postBody.dump() });
 
     const auto j = nlohmann::json::parse(response.text);

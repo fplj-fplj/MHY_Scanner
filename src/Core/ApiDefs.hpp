@@ -56,12 +56,15 @@ struct GeetestData
     ServerType GeeTestType{};
 };
 
-constinit const std::string_view mihoyobbs_version{ "2.75.2" };
+constinit const std::string_view mihoyobbs_version{ "2.95.1" };
 constinit const std::string_view mihoyobbs_salt{ "oqrJbPCoFhWhFBNDvVRuldbrbiVxyWsP" };
 constinit const std::string_view mihoyobbs_salt_web{ "zZDfHqEcwTqvvKDmqRcHyqqurxGgLfBV" };
 
 constinit const std::string_view mihoyobbs_salt_x4{ "xV8v4Qu54lUKrEYFZkJhB8cuOh9Asafs" };
 constinit const std::string_view mihoyobbs_salt_x6{ "t0qEgfub6cvueAPgR5m9aQWWVciEer7v" };
+constinit const std::string_view mihoyobbs_salt_prod{ "JwYDpKvLj6MrMqqYU6jTKF17KNO2PXoS" };
+constinit const std::string_view mihoyobbs_salt_k2{ "sfYPEgpxkOe1I3XVMLdwp1Lyt9ORgZsq" };
+constinit const std::string_view mihoyobbs_salt_lk2{ "sidQFEglajEz7FA0Aj7HQPV88zpf17SO" };
 
 namespace api::mhy
 {
@@ -116,6 +119,11 @@ namespace passport
 constexpr compile_string base{ "https://passport-api.mihoyo.com" };
 constexpr auto create_captcha = base + compile_string{ "/account/ma-cn-verifier/verifier/createLoginCaptcha" };
 constexpr auto login_by_mobile_captcha = base + compile_string{ "/account/ma-cn-passport/app/loginByMobileCaptcha" };
+constexpr auto create_qr_login = base + compile_string{ "/account/ma-cn-passport/app/createQRLogin" };
+constexpr auto query_qr_login_status = base + compile_string{ "/account/ma-cn-passport/app/queryQRLoginStatus" };
+constexpr auto get_cookie_account_info_by_stoken = base + compile_string{ "/account/auth/api/getCookieAccountInfoBySToken" };
+constexpr auto get_ltoken_by_stoken = base + compile_string{ "/account/auth/api/getLTokenBySToken" };
+constexpr auto get_stoken_by_old_token = base + compile_string{ "/account/ma-cn-session/app/getTokenBySToken" };
 }
 
 namespace mys
